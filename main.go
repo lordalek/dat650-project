@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 )
 
 const (
@@ -14,8 +15,9 @@ const (
 )
 
 type Miner interface {
-	Tick(int, int)
-	Mine(int, int) bool
+	TickMine(int, int)
+	TickCommunicate()
+	Mine(int, int) *Block
 	SetNeighbors([]Miner)
 	AddNeighbor(Miner)
 
@@ -32,21 +34,25 @@ type Miner interface {
 	GetBlockchain() []*Block
 	GetLastBlock() *Block
 	PopBlock() *Block
-	GetUncles() []*Block
+	GetUncles() map[string]*Block
 
 	AppendBlock(*Block)
 	AppendUncle(*Block)
+	ForgetUncle(*Block)
 
 	ReceiveBlock(*Block)
+	EnqueueBlock(*Block)
 	PublishBlock(*Block)
 }
 
 type HonestMiner struct {
 	blockchain   []*Block
-	uncles       []*Block
+	uncles       map[string]*Block
 	neighbors    []Miner
-	miningPower int
+	miningPower  int
 	id           string
+	publishQueue []*Block
+	SeenBlocks   map[string]interface{}
 }
 
 type SelfishMiner struct {
@@ -58,7 +64,7 @@ type SelfishMiner struct {
 type Block struct {
 	minerID   string
 	parent    *Block
-	uncles    []*Block
+	uncles    map[string]*Block
 	timestamp int
 	fees      int
 	depth     int
@@ -75,10 +81,11 @@ func NewMiner(name string, neighbors []Miner, mining_power int) Miner {
 	}
 	return &HonestMiner{
 		blockchain:   bc,
-		uncles:       []*Block{},
+		uncles:       make(map[string]*Block),
 		neighbors:    neighbors,
-		miningPower: mining_power,
+		miningPower:  mining_power,
 		id:           name,
+		SeenBlocks:   make(map[string]interface{}),
 	}
 }
 
@@ -108,28 +115,55 @@ func (s *SelfishMiner) AddNeighbor(n Miner) {
 }
 
 //initializes new block with a given parent, list of uncles and a timestamp
-func NewBlock(minerID string, parent *Block, uncles []*Block, timestamp int) *Block {
+func NewBlock(minerID string, parent *Block, uncles map[string]*Block, timestamp int) *Block {
 	newDepth := -1
 	newFees := 0
 	if parent != nil {
 		newDepth = parent.depth + 1
 		newFees = timestamp - parent.timestamp + BLOCK_REWARD
 	}
+
+	buncles := make(map[string]*Block)
+	for k, v := range uncles {
+		buncles[k] = v
+	}
 	return &Block{
 		minerID:   minerID,
 		parent:    parent,
-		uncles:    uncles,
+		uncles:    buncles,
 		timestamp: timestamp,
 		fees:      newFees,
 		depth:     newDepth,
 	}
 }
 
+func (b *Block) GetID() string {
+	return fmt.Sprintf("%s_%d", b.minerID, b.timestamp)
+}
+
+func (b *Block) String() string {
+	var lines []string
+	lines = append(lines, fmt.Sprintf("============ Block %s ============", b.GetID()))
+	lines = append(lines, fmt.Sprintf("Parent: %s", b.parent.GetID()))
+	lines = append(lines, fmt.Sprintf("Timestamp: %v", b.timestamp))
+	lines = append(lines, fmt.Sprintf("depth: %d", b.depth))
+	lines = append(lines, fmt.Sprintf("Uncles: %d", len(b.uncles)))
+	for i, _ := range b.uncles {
+		lines = append(lines, fmt.Sprintf("\t%s", i))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (b *Block) Equals(block *Block) bool {
+	return b.GetID() == block.GetID()
+	//return b.minerID == block.minerID && b.parent.GetID() == block.parent.GetID() && b.timestamp == block.timestamp && b.depth == block.depth
+	//TODO: check if uncles match
+}
+
 //do things the miner should do each time step
-func (m *HonestMiner) Tick(totPower, timestamp int) {
-	blockFound := m.Mine(totPower, timestamp)
-	if blockFound {
-		block := m.BlockFound(timestamp)
+/*func (m *HonestMiner) Tick(totPower, timestamp int) {
+	block := m.Mine(totPower, timestamp)
+	if block != nil {
 		m.AppendBlock(block)
 		m.PublishBlock(block)
 	}
@@ -138,10 +172,8 @@ func (m *HonestMiner) Tick(totPower, timestamp int) {
 }
 
 func (s *SelfishMiner) Tick (totPower, timestamp int) {
-	blockFound := s.Mine(totPower, timestamp)
-	block := &Block{}
-	if blockFound {
-		block = s.BlockFound(timestamp)
+	block := s.Mine(totPower, timestamp)
+	if block != nil {
 		s.AppendBlock(block)
 		//enqueue block for delayed publishing
 	}
@@ -153,6 +185,39 @@ func (s *SelfishMiner) Tick (totPower, timestamp int) {
 	}
 
 	return
+}*/
+
+func (m *HonestMiner) TickMine(totPower, timestamp int) {
+	block := m.Mine(totPower, timestamp)
+	if block != nil {
+		m.AppendBlock(block)
+		m.EnqueueBlock(block)
+	}
+}
+
+func (m *HonestMiner) TickCommunicate() {
+	blocks := m.publishQueue
+	m.publishQueue = []*Block{}
+	for _, b := range blocks {
+		m.PublishBlock(b)
+	}
+}
+
+func (s *SelfishMiner) TickMine(totPower, timestamp int) {
+	block := s.Mine(totPower, timestamp)
+	if block != nil {
+		s.AppendBlock(block)
+		s.EnqueueBlock(block)
+	}
+}
+
+func (s *SelfishMiner) TickCommunicate() {
+	//increment queue pointer then publish items at pointer pos.
+	s.publishCounter += 1
+	blocks := s.publishQueue[s.publishCounter]
+	for _, b := range blocks {
+		s.PublishBlock(b)
+	}
 }
 
 //miner makes an attempt to mine a new block
@@ -161,16 +226,16 @@ func (s *SelfishMiner) Tick (totPower, timestamp int) {
 //new block can reference one or more uncles, gaining extra rewards
 //when block is found, trigger BlockFound()
 //tot_power and timestamp tracked in main()
-func (m *HonestMiner) Mine(totPower, timestamp int) bool {
-	odds := 1 * float64(m.miningPower) / float64(totPower)
+func (m *HonestMiner) Mine(totPower, timestamp int) *Block {
+	odds := 0.1 * float64(m.miningPower) / float64(totPower)
 	if odds > rand.Float64() {
-		return true
+		return m.BlockFound(timestamp)
 	}
-	return false
+	return nil
 }
 
 //wait x ticks before announcing
-func (s *SelfishMiner) Mine(totPower, timestamp int) bool {
+func (s *SelfishMiner) Mine(totPower, timestamp int) *Block {
 	return s.miner.Mine(totPower, timestamp)
 }
 
@@ -178,8 +243,15 @@ func (m *HonestMiner) BlockFound(timestamp int) *Block {
 	parent := m.GetLastBlock()
 	uncles := m.GetUncles()
 	block := NewBlock(m.id, parent,uncles,timestamp + rand.Intn(99))	//timestamp in steps of 100 -> rand up to 99
-	//m.blockchain = append(m.blockchain, block)
-	//m.PublishBlock(block)
+	//remove uncles
+	for _, i := range uncles {
+		//TODO: remove uncle
+		m.ForgetUncle(i)
+	}
+
+	fmt.Println(fmt.Sprintf("%+v\n", block))
+
+	m.SeenBlocks[block.GetID()] = true
 	return block
 }
 
@@ -191,14 +263,29 @@ func (m *HonestMiner) PublishBlock(b *Block) {
 	for _, i := range m.neighbors {
 		i.ReceiveBlock(b)
 	}
-	fmt.Println(fmt.Sprintf("%+v\n", b))
 }
 
 func (s *SelfishMiner) PublishBlock(b *Block) {
 	s.miner.PublishBlock(b)
-	return
 }
 
+func (m *HonestMiner) EnqueueBlock(b *Block) {
+	m.publishQueue = append(m.publishQueue, b)
+}
+
+func (s *SelfishMiner) EnqueueBlock(b *Block) {
+	if b != nil {
+		s.publishQueue[s.publishCounter+1] = append(s.publishQueue[s.publishCounter], b)
+	}
+}
+
+func (s *SelfishMiner) DelayBlock(b *Block) {
+	if b != nil {
+		s.publishQueue[s.publishCounter] = append(s.publishQueue[s.publishCounter], b)
+	}
+}
+
+/*
 func (s *SelfishMiner) TickDelayedPublish(b *Block) []*Block {
 	emptyBlock := &Block{}
 	if b != emptyBlock {
@@ -206,30 +293,42 @@ func (s *SelfishMiner) TickDelayedPublish(b *Block) []*Block {
 	}
 	s.publishCounter = (s.publishCounter + 1) % SELFISH_PUBLISH_DELAY
 	return s.publishQueue[s.publishCounter]
-}
+}*/
 
+//ignore block if has been seen before
+//if block extends current block, append to chain
+//if extends previous block, add to uncles
 func (m *HonestMiner) ReceiveBlock(b *Block) {
-	for _, i := range m.GetBlockchain() {
-		if i == b {
-			//TODO: write block.Equals(block) function instead of relying on pointers being the same
-			return
-		}
+	if _, found := m.SeenBlocks[b.GetID()]; found {
+		return
 	}
-	last_block := m.GetLastBlock()
-	if b.depth > last_block.depth {
+	m.SeenBlocks[b.GetID()] = true
+
+	for _, i := range b.uncles {
+		m.ForgetUncle(i)
+		m.SeenBlocks[i.GetID()] = true
+	}
+
+	m.EnqueueBlock(b)
+
+	//compare latest block to newly received block, set one to latest block and set the other to uncle
+	last_block := m.PopBlock()
+	if last_block.depth < b.depth {
 		//append new block to chain
+		m.AppendBlock(last_block)
 		m.AppendBlock(b)
-	} else if b.depth < last_block.depth {
-		//append new block to uncles
+	} else if last_block.depth > b.depth {
+		//append new block to uncles 
+		m.AppendBlock(last_block)
 		m.AppendUncle(b)
-	} else if b.timestamp > last_block.timestamp {
+	} else if last_block.timestamp < b.timestamp {
 		//same depth -> move block with lower timestamp to chain and block with higher timestamp to uncles
+		m.AppendBlock(last_block)
 		m.AppendUncle(b)
 	} else {
-		m.uncles = append(m.uncles, m.PopBlock())
 		m.AppendBlock(b)
+		m.AppendUncle(last_block)
 	}
-	return
 }
 
 func (s *SelfishMiner) ReceiveBlock(b *Block) {
@@ -273,17 +372,26 @@ func (s *SelfishMiner) AppendBlock(b *Block) {
 }
 
 func (m *HonestMiner) AppendUncle(b *Block) {
-	m.uncles = append(m.uncles, b)
+	m.uncles[b.GetID()] = b
 }
 
 func (s *SelfishMiner) AppendUncle(b *Block) {
 	s.miner.AppendUncle(b)
 }
-func (m *HonestMiner) GetUncles() []*Block {
+
+func (m *HonestMiner) ForgetUncle(b *Block) {
+	delete(m.uncles, b.GetID())
+}
+
+func (s *SelfishMiner) ForgetUncle(b *Block) {
+	s.miner.ForgetUncle(b)
+}
+
+func (m *HonestMiner) GetUncles() map[string]*Block {
 	return m.uncles
 }
 
-func (s *SelfishMiner) GetUncles() []*Block {
+func (s *SelfishMiner) GetUncles() map[string]*Block {
 	return s.miner.GetUncles()
 }
 
@@ -302,31 +410,37 @@ func main() {
 	*) uncles limit
 	*/
 
-	rand.Seed(1230)
-	m := HonestMiner{id: "hello world"}
-	fmt.Println(m.id)
+	rand.Seed(42069)
+	fmt.Println("hello_world")
 	totalMiningPower := 0
 
 	miners := []Miner{}
-	numMiners := 3
+	numMiners := 100
 	for i := 0; i < numMiners; i++ {
-		miners = append(miners, NewMiner(fmt.Sprintf("m%d", i), nil, (i+1)%2*(i+1)))
-		totalMiningPower += (i+1)%2*(i+1)
+		newMinerPowa := rand.Intn(10)
+		miners = append(miners, NewMiner(fmt.Sprintf("m%d", i), nil, newMinerPowa)) //(i+1)%2*(i+1)))
+		totalMiningPower += newMinerPowa//(i+1)%2*(i+1)
+	}
+	for idx, i := range miners {
+		i.SetNeighbors([]Miner{miners[(idx-1+numMiners)%numMiners]})
+		i.SetNeighbors([]Miner{miners[(idx+1)%numMiners]})
 	}
 	/*
-	for _, i := range miners {
-		i.SetNeighbors(miners)
-	}
-	*/
 	miners[0].AddNeighbor(miners[1])
 	miners[1].AddNeighbor(miners[0])
 	miners[1].AddNeighbor(miners[2])
 	miners[2].AddNeighbor(miners[1])
+	*/
+
 	time := 0
 	for time < 10000 {
 		time += 100
 		for _, i := range(miners) {
-			i.Tick(totalMiningPower, time)
+			i.TickMine(totalMiningPower, time)
+		}
+		for _, i := range(miners) {
+			i.TickCommunicate()
 		}
 	}
+	fmt.Printf("total mining power: %d\n", totalMiningPower)
 }
