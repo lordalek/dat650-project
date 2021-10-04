@@ -443,4 +443,5 @@ func main() {
 		}
 	}
 	fmt.Printf("total mining power: %d\n", totalMiningPower)
+	//pølse
 }
