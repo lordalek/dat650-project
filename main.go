@@ -656,9 +656,6 @@ func main() {
 		for _, i := range(miners) {
 			i.TickMine(totalMiningPower, time)
 		}
-		//NOTE: blocks are shared sequentially starting with the miner with the lowest ID
-		//i.e. when blocks are mined simultaneously, the smaller miner will share their  block first
-		//results in slightly higher effective mining power for smaller miners
 		for _, i := range(miners) {
 			i.TickCommunicate()
 		}
