@@ -1,0 +1,13 @@
+runs: 20
+miners: 100
+uncles: yes, no
+selfish miners: 0, 1
+time: 10^7
+mining power: 	flat (1.0^n), 
+		exponential (1.2^n), 
+		random linear (rand.Intn(100)), 
+		random exp (1.2^(rand.Intn(100))
+selfish settings:
+	publish delay: 3, 10, 30, 100
+	mining power: 10th, 50th, 90th percentile of above distributions
+
