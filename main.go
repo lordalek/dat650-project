@@ -21,9 +21,9 @@ const (
 type Miner interface {
 	GetID() string
 	GetMiningPower() int
-	GenerateNeighbors([]Miner, int)
+	GenerateNeighbors([]Miner, int, bool)
 	SetNeighbors([]Miner)
-	AddNeighbor(Miner)
+	AddNeighbor(Miner, bool)
 
 	TickMine(int, int)
 	Mine(int, int) *Block
@@ -132,14 +132,14 @@ func (s *SelfishMiner) GetMiningPower() int {
 	return s.miner.GetMiningPower()
 }
 
-func (m *HonestMiner) GenerateNeighbors(miners []Miner, n int) {
+func (m *HonestMiner) GenerateNeighbors(miners []Miner, n int, mutual bool) {
 	for i := 0; i < n; i++ {
-		m.AddNeighbor(miners[rand.Intn(len(miners))])
+		m.AddNeighbor(miners[rand.Intn(len(miners))], mutual)
 	}
 }
 
-func (s *SelfishMiner) GenerateNeighbors(m []Miner, n int) {
-	s.miner.GenerateNeighbors(m,n)
+func (s *SelfishMiner) GenerateNeighbors(m []Miner, n int, mutual bool) {
+	s.miner.GenerateNeighbors(m,n,mutual)
 }
 
 func (m *HonestMiner) SetNeighbors(n []Miner) {
@@ -150,12 +150,15 @@ func (s *SelfishMiner) SetNeighbors(n []Miner) {
 	s.miner.SetNeighbors(n)
 }
 
-func (m *HonestMiner) AddNeighbor(n Miner) {
+func (m *HonestMiner) AddNeighbor(n Miner, mutual bool) {
 	m.neighbors = append(m.neighbors, n)
+	if mutual {
+		n.AddNeighbor(m, false)
+	}
 }
 
-func (s *SelfishMiner) AddNeighbor(n Miner) {
-	s.miner.AddNeighbor(n)
+func (s *SelfishMiner) AddNeighbor(n Miner, mutual bool) {
+	s.miner.AddNeighbor(n, mutual)
 }
 
 //initializes new block with a given parent, list of uncles and a timestamp
@@ -236,7 +239,7 @@ func (s *SelfishMiner) TickMine(totPower, timestamp int) {
 
 func (s *SelfishMiner) TickCommunicate() {
 	//increment queue pointer then publish items at pointer pos.
-	s.publishCounter += 1
+	s.publishCounter = (s.publishCounter + 1) % SELFISH_PUBLISH_DELAY
 	blocks := s.PublishQueue[s.publishCounter]
 	for _, b := range blocks {
 		s.PublishBlock(b)
@@ -309,7 +312,7 @@ func (m *HonestMiner) EnqueueBlock(b *Block) {
 
 func (s *SelfishMiner) EnqueueBlock(b *Block) {
 	if b != nil {
-		s.PublishQueue[s.publishCounter+1] = append(s.PublishQueue[s.publishCounter], b)
+		s.PublishQueue[(s.publishCounter+1)%SELFISH_PUBLISH_DELAY] = append(s.PublishQueue[s.publishCounter], b)
 	}
 }
 
@@ -603,25 +606,35 @@ func main() {
 	/*
 	model blockchain with uncles and uncle rewards
 	  X model blockchain
-	  / with uncles
+	  X with uncles
 	    > miners should try to extend their own block before other blocks at same depth
 	    > currently uncles are simply discarded on inclusion in a block; should be kept in chain somehow
-	  / and rewards
+	  X and rewards
 	model rewarding mechanism to reward uncle block creators / nephew rewards
-	  - look up how ethereum does it
+	  X look up how ethereum does it
 	    > uncle gets (1 - (n.depth - u.depth)/7) times a block reward
 	    > nephew gets 1/32 of a block reward per uncle included
-	  - implement
+	  X implement
 	model selfish mining in this blockchain
 	  / implement selfish miner
 	  - test selfish miner - profitability
 	how do uncles improve fairness? compare outcome of miners with/without uncles
-	  - limit number of uncles per block
-	  - model uncle and nephew rewards
+	  X limit number of uncles per block
+	  X model uncle and nephew rewards
 	  - incorporate uncles in fairness calculations
+	    > reframe to rewards / mining power?
 	how do uncles affect selfish mining? more profitable with uncles?
 	  - 
 	describe profitability of selfish mining in this chain mathematically
+	*/
+	//experiments/report
+	/*
+	how do uncles improve fairness? compare outcome of miners with/without uncles
+	  > graph avg (gains / mining power) over several runs, one plot containing graph with and graph without uncles
+	  > fairness func returns map[miner.ID]gains, or map[]gains/power, or []{power, gains}, plug this into graphing func
+	  > tests: 100 miners on all; one with all equal mining power; one with random linear mining power; one with exponential mining power; one with random exponential mining power
+	impact of uncles on selfish mining - more profitable?
+	what does it mean for selfish mining to be profitable in this chain
 	*/
 	//TODOs:
 	/*
@@ -629,7 +642,7 @@ func main() {
 	test/tweak selfish miner
 	*/
 
-	rand.Seed(1231)
+	rand.Seed(1236)
 	fmt.Println("hello_world")
 	dummy := NewMiner("debug_dummy", nil, 0)
 	totalMiningPower := 0
@@ -642,10 +655,14 @@ func main() {
 
 		totalMiningPower += newMinerPowa//(i+1)%2*(i+1)
 	}
+	//the selfish miner
+	sid := 90
+	selfishMiner := NewSelfishMiner("s1", nil, miners[sid].GetMiningPower())
+	miners = append(miners, selfishMiner)
 	for _, i := range miners {
 		//i.SetNeighbors(miners)
-		i.GenerateNeighbors(miners, 10)
-		i.AddNeighbor(dummy)	//keeps "canonical" blockchain
+		i.GenerateNeighbors(miners, 10, true)
+		i.AddNeighbor(dummy, false)	//keeps "canonical" blockchain
 		//i.AddNeighbor(miners[(idx-1+numMiners)%numMiners])
 		//i.AddNeighbor(miners[(idx+1)%numMiners])
 	}
@@ -671,8 +688,9 @@ func main() {
 	fmt.Println("rewards gained per miner:")
 	gains := dummy.CalculateGains()
 	for i := 0; i < len(miners); i++ {
-		k := fmt.Sprintf("m%d", i)
+		k := fmt.Sprintf("%s", miners[i].GetID())
 		v := gains[k]
 		fmt.Printf("%s: power: %d, gains: %f\n",k,miners[i].GetMiningPower(), v)
 	}
+	fmt.Printf("%s: power: %d, gains: %f\n",miners[sid].GetID(),miners[sid].GetMiningPower(), gains[miners[sid].GetID()])
 }
