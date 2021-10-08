@@ -10,8 +10,8 @@ import (
 const (
 	TICK_LENGTH		= 100
 	BLOCK_CHANCE		= 0.1
-	BLOCK_REWARD		= 10 //TICK_LENGTH / BLOCK_CHANCE * 10	//google says fees are typically 10% of eth block rewards; we give fees = time since last block
-	FEES_PER_SECOND		= 0
+	BLOCK_REWARD		= TICK_LENGTH / BLOCK_CHANCE * 10	//google says fees are typically 10% of eth block rewards; we give fees = time since last block
+	FEES_PER_SECOND		= 1
 	UNCLE_REWARD		= 0	//block reward * (1 - (distance from nephew)/7)
 	NEPHEW_REWARD		= 0	//block reward * 1/32
 	UNCLES_LIMIT		= 2
@@ -48,7 +48,7 @@ type Miner interface {
 
 	GetBlockchain() []*Block
 	GetLastBlock() *Block
-	CalculateGains() map[string]float64
+	CalculateGains() map[string][]float64
 }
 
 type HonestMiner struct {
@@ -519,8 +519,8 @@ func (s *SelfishMiner) GetPendingUncles() map[string]*Block {
 //iterate through the block chain, starting with latest block and iterating through parents: 
 //  add fees from each block to the miner's total earnings
 //TODO: uncles
-func (m *HonestMiner) CalculateGains() map[string]float64 {
-	gains := make(map[string]float64)
+func (m *HonestMiner) CalculateGains() map[string][]float64 {
+	gains := make(map[string][]float64)
 	curBlock := m.GetLastBlock()
 	mid := ""
 	blockReward := 0.0
@@ -537,23 +537,31 @@ func (m *HonestMiner) CalculateGains() map[string]float64 {
 			uncleDistance = curBlock.depth - u.depth
 			uncleReward = math.Max(float64(BLOCK_REWARD) * (1 - float64(uncleDistance)/7),0)
 			if _, found := gains[uid]; found {
-				gains[uid] += uncleReward
+				gains[uid][0] += uncleReward
+				gains[uid][2] += 1
 			} else {
-				gains[uid] = uncleReward
+				gains[uid] = []float64{}
+				gains[uid] = append(gains[uid], uncleReward)
+				gains[uid] = append(gains[uid], 0)
+				gains[uid] = append(gains[uid], 1)
 			}
 		}
 		mid = curBlock.minerID
 		if _, found := gains[mid]; found {
-			gains[mid] += blockReward
+			gains[mid][0] += blockReward
+			gains[mid][1] += 1
 		} else {
-			gains[mid] = blockReward
+			gains[mid] = []float64{}
+			gains[mid] = append(gains[mid], blockReward)
+			gains[mid] = append(gains[mid], 1)
+			gains[mid] = append(gains[mid], 0)
 		}
 		curBlock = curBlock.parent
 	}
 	return gains
 }
 
-func (s *SelfishMiner) CalculateGains() map[string]float64 {
+func (s *SelfishMiner) CalculateGains() map[string][]float64 {
 	return s.miner.CalculateGains()
 }
 
@@ -638,19 +646,25 @@ func main() {
 	*/
 	//TODOs:
 	/*
-	update fairness calculation
-	test/tweak selfish miner
+	X update fairness calculation -- nah just use results
+	setup parameterized iterative testing
+	  X config params specified
+	  - setup way to read and use config, ref discord
+	  - 
+	do analysis and graph generation with big data library/program
 	*/
 
-	rand.Seed(1236)
-	fmt.Println("hello_world")
+	//nice-to-have: plot of block/time with and without selfish miner
+
+	rand.Seed(420692)
+	//fmt.Println("hello_world")
 	dummy := NewMiner("debug_dummy", nil, 0)
 	totalMiningPower := 0
 
 	miners := []Miner{}
 	numMiners := 100
 	for i := 0; i < numMiners; i++ {
-		newMinerPowa := int(math.Floor(math.Pow(1.2,float64(i))))
+		newMinerPowa := int(math.Floor(math.Pow(1.0,float64(i))))
 		miners = append(miners, NewMiner(fmt.Sprintf("m%d", i), nil, newMinerPowa)) //(i+1)%2*(i+1)))
 
 		totalMiningPower += newMinerPowa//(i+1)%2*(i+1)
@@ -681,16 +695,18 @@ func main() {
 		}
 		dummy.TickRead()
 	}
-	fmt.Printf("total mining power: %d\n", totalMiningPower)
-	fmt.Printf("fairness: %f\n", CalculateFairness(miners, dummy.GetBlockchain(), len(dummy.GetSeenBlocks())))
-	fmt.Printf("mining power utilization: %f\n", CalculatePowerUtil(dummy.GetBlockchain(), len(dummy.GetSeenBlocks())))
-	fmt.Println("blocks created:", len(dummy.GetSeenBlocks()))
-	fmt.Println("rewards gained per miner:")
+	//fmt.Printf("total mining power: %d\n", totalMiningPower)
+	//fmt.Printf("fairness: %f\n", CalculateFairness(miners, dummy.GetBlockchain(), len(dummy.GetSeenBlocks())))
+	//fmt.Printf("mining power utilization: %f\n", CalculatePowerUtil(dummy.GetBlockchain(), len(dummy.GetSeenBlocks())))
+	//fmt.Println("blocks created:", len(dummy.GetSeenBlocks()))
+	//fmt.Println("rewards gained per miner:")
 	gains := dummy.CalculateGains()
+	fmt.Println("minerID,power,rewards_gained,main_blocks_created,uncle_blocks_created")
 	for i := 0; i < len(miners); i++ {
 		k := fmt.Sprintf("%s", miners[i].GetID())
 		v := gains[k]
-		fmt.Printf("%s: power: %d, gains: %f\n",k,miners[i].GetMiningPower(), v)
+		fmt.Printf("%s,%d,%f,%f,%f\n",k,miners[i].GetMiningPower(), v[0],v[1],v[2])
 	}
-	fmt.Printf("%s: power: %d, gains: %f\n",miners[sid].GetID(),miners[sid].GetMiningPower(), gains[miners[sid].GetID()])
+	copy_gains := gains[miners[sid].GetID()[:]]
+	fmt.Printf("%s,%d,%f,%f,%f\n",miners[sid].GetID(),miners[sid].GetMiningPower(), copy_gains[0],copy_gains[1],copy_gains[2])
 }
