@@ -5,6 +5,8 @@ import (
 	"math"
 	"math/rand"
 	"strings"
+	"os"
+	"encoding/json"
 )
 
 const (
@@ -15,8 +17,20 @@ const (
 	UNCLE_REWARD		= 0	//block reward * (1 - (distance from nephew)/7)
 	NEPHEW_REWARD		= 0	//block reward * 1/32
 	UNCLES_LIMIT		= 2
-	SELFISH_PUBLISH_DELAY	= 10
+	//SELFISH_PUBLISH_DELAY	= 10
 )
+
+type config struct {
+	Runs		int	//default 20
+	Time		int	//default 10^7
+	Miners		int	//default 100
+	MaxUncles	int	//uncles enabled? t/f
+	PowerScaling	float64	//number equal to or greater than 1.0, miner n will have pS^n mining power
+	//PowerRandomness	float64	//top of random range of power, bottom is 1.0
+	SelfishMiners	int	//one or zero, more possible but out of scope
+	SelfishDelay	int	//how many rounds does a selfish miner wait before publishing a block?
+	SelfishPower	float64	//percentile of regular miners the selfish miner has more mining power than, (0,1)
+}
 
 type Miner interface {
 	GetID() string
@@ -54,6 +68,7 @@ type Miner interface {
 type HonestMiner struct {
 	blockchain	[]*Block
 	pendingUncles	map[string]*Block
+	maxUncles	int
 	neighbors	[]Miner
 	miningPower	int
 	id		string
@@ -64,6 +79,7 @@ type HonestMiner struct {
 
 type SelfishMiner struct {
 	miner          Miner
+	publishDelay   int
 	PublishQueue   [][]*Block	//circular array queue
 	publishCounter int
 }
@@ -78,7 +94,7 @@ type Block struct {
 }
 
 //initializes new miner with the first neighbor's blockchain and uncles, and the list of neighbors as neighbors
-func NewMiner(name string, neighbors []Miner, mining_power int) Miner {
+func NewMiner(name string, neighbors []Miner, mining_power, maxUncles int) Miner {
 	genesisBlock := NewBlock("genesis", nil,nil,0)
 	bc := []*Block{}
 	if len(neighbors) != 0 {
@@ -88,6 +104,7 @@ func NewMiner(name string, neighbors []Miner, mining_power int) Miner {
 	}
 	return &HonestMiner{
 		blockchain:   bc,
+		maxUncles:    maxUncles,
 		pendingUncles:       make(map[string]*Block),
 		neighbors:    neighbors,
 		miningPower:  mining_power,
@@ -98,13 +115,13 @@ func NewMiner(name string, neighbors []Miner, mining_power int) Miner {
 	}
 }
 
-func NewSelfishMiner(name string, neighbors []Miner, mining_power int) Miner {
-	miner := NewMiner(name, neighbors, mining_power)
+func NewSelfishMiner(name string, neighbors []Miner, mining_power, selfishDelay, maxUncles int) Miner {
+	miner := NewMiner(name, neighbors, mining_power, maxUncles)
 	queue := [][]*Block{}
-	for i := 0; i < SELFISH_PUBLISH_DELAY; i++ {
+	for i := 0; i < selfishDelay; i++ {
 		queue = append(queue, []*Block{})
 	}
-	return &SelfishMiner{miner: miner, PublishQueue: queue, publishCounter: 0}
+	return &SelfishMiner{miner: miner, publishDelay: selfishDelay, PublishQueue: queue, publishCounter: 0}
 }
 
 func (m *HonestMiner) String() string {
@@ -239,7 +256,7 @@ func (s *SelfishMiner) TickMine(totPower, timestamp int) {
 
 func (s *SelfishMiner) TickCommunicate() {
 	//increment queue pointer then publish items at pointer pos.
-	s.publishCounter = (s.publishCounter + 1) % SELFISH_PUBLISH_DELAY
+	s.publishCounter = (s.publishCounter + 1) % s.publishDelay
 	blocks := s.PublishQueue[s.publishCounter]
 	for _, b := range blocks {
 		s.PublishBlock(b)
@@ -312,7 +329,7 @@ func (m *HonestMiner) EnqueueBlock(b *Block) {
 
 func (s *SelfishMiner) EnqueueBlock(b *Block) {
 	if b != nil {
-		s.PublishQueue[(s.publishCounter+1)%SELFISH_PUBLISH_DELAY] = append(s.PublishQueue[s.publishCounter], b)
+		s.PublishQueue[(s.publishCounter+1)%s.publishDelay] = append(s.PublishQueue[s.publishCounter], b)
 	}
 }
 
@@ -656,57 +673,74 @@ func main() {
 
 	//nice-to-have: plot of block/time with and without selfish miner
 
-	rand.Seed(420692)
-	//fmt.Println("hello_world")
-	dummy := NewMiner("debug_dummy", nil, 0)
-	totalMiningPower := 0
+	json_path := os.Args[1]
+	file, _ := os.Open("./config/" + json_path)
+	conf := config{}
+	buf := make([]byte, 4096)
+	n, _ := file.Read(buf)
+	json.Unmarshal(buf[:n], &conf)
+	//fmt.Println(conf)
 
-	miners := []Miner{}
-	numMiners := 100
-	for i := 0; i < numMiners; i++ {
-		newMinerPowa := int(math.Floor(math.Pow(1.0,float64(i))))
-		miners = append(miners, NewMiner(fmt.Sprintf("m%d", i), nil, newMinerPowa)) //(i+1)%2*(i+1)))
+	for run := 0; run < conf.Runs; run++ {
+		rand.Seed(int64(1230 + run))
+		//fmt.Println("hello_world")
+		dummy := NewMiner("debug_dummy", nil, 0, 0)
+		totalMiningPower := 0
 
-		totalMiningPower += newMinerPowa//(i+1)%2*(i+1)
-	}
-	//the selfish miner
-	sid := 90
-	selfishMiner := NewSelfishMiner("s1", nil, miners[sid].GetMiningPower())
-	miners = append(miners, selfishMiner)
-	for _, i := range miners {
-		//i.SetNeighbors(miners)
-		i.GenerateNeighbors(miners, 10, true)
-		i.AddNeighbor(dummy, false)	//keeps "canonical" blockchain
-		//i.AddNeighbor(miners[(idx-1+numMiners)%numMiners])
-		//i.AddNeighbor(miners[(idx+1)%numMiners])
-	}
+		miners := []Miner{}
+		numMiners := conf.Miners
+		for i := 0; i < numMiners; i++ {
+			newMinerPowa := int(math.Floor(math.Pow(conf.PowerScaling,float64(i))))
+			miners = append(miners, NewMiner(fmt.Sprintf("m%d", i), nil, newMinerPowa, conf.MaxUncles)) //(i+1)%2*(i+1)))
 
-	time := 0
-	for time < 1000000 {
-		time += TICK_LENGTH
-		for _, i := range(miners) {
-			i.TickMine(totalMiningPower, time)
+			totalMiningPower += newMinerPowa//(i+1)%2*(i+1)
 		}
-		for _, i := range(miners) {
-			i.TickCommunicate()
+		//the selfish miner
+		sid := 90
+		for i := 0; i < conf.SelfishMiners; i++ {
+			minerPowerIdx := int(float64(numMiners) * conf.SelfishPower)
+			selfishMiner := NewSelfishMiner(fmt.Sprintf("s%d", i), nil, miners[minerPowerIdx].GetMiningPower(), conf.SelfishDelay, conf.MaxUncles)
+			miners = append(miners, selfishMiner)
 		}
-		for _, i := range(miners) {
-			i.TickRead()
+		for _, i := range miners {
+			//i.SetNeighbors(miners)
+			i.GenerateNeighbors(miners, 10, true)
+			i.AddNeighbor(dummy, false)	//keeps "canonical" blockchain
+			//i.AddNeighbor(miners[(idx-1+numMiners)%numMiners])
+			//i.AddNeighbor(miners[(idx+1)%numMiners])
 		}
-		dummy.TickRead()
+
+		time := 0
+		for time < conf.Time {	//TODO: remove debug /100
+			time += TICK_LENGTH
+			for _, i := range(miners) {
+				i.TickMine(totalMiningPower, time)
+			}
+			for _, i := range(miners) {
+				i.TickCommunicate()
+			}
+			for _, i := range(miners) {
+				i.TickRead()
+			}
+			dummy.TickRead()
+		}
+		//fmt.Printf("total mining power: %d\n", totalMiningPower)
+		//fmt.Printf("fairness: %f\n", CalculateFairness(miners, dummy.GetBlockchain(), len(dummy.GetSeenBlocks())))
+		//fmt.Printf("mining power utilization: %f\n", CalculatePowerUtil(dummy.GetBlockchain(), len(dummy.GetSeenBlocks())))
+		//fmt.Println("blocks created:", len(dummy.GetSeenBlocks()))
+		//fmt.Println("rewards gained per miner:")
+		gains := dummy.CalculateGains()
+		fmt.Println("minerID,power,rewards_gained,main_blocks_created,uncle_blocks_created")
+		for i := 0; i < len(miners); i++ {
+			k := fmt.Sprintf("%s", miners[i].GetID())
+			v := gains[k]
+			if len(v) >= 3 {
+				fmt.Printf("%s,%d,%f,%f,%f\n",k,miners[i].GetMiningPower(), v[0],v[1],v[2])
+			}
+		}
+		copy_gains := gains[miners[sid].GetID()[:]]
+		if len(copy_gains) >= 3 {
+			fmt.Printf("%s,%d,%f,%f,%f\n",miners[sid].GetID(),miners[sid].GetMiningPower(), copy_gains[0],copy_gains[1],copy_gains[2])
+		}
 	}
-	//fmt.Printf("total mining power: %d\n", totalMiningPower)
-	//fmt.Printf("fairness: %f\n", CalculateFairness(miners, dummy.GetBlockchain(), len(dummy.GetSeenBlocks())))
-	//fmt.Printf("mining power utilization: %f\n", CalculatePowerUtil(dummy.GetBlockchain(), len(dummy.GetSeenBlocks())))
-	//fmt.Println("blocks created:", len(dummy.GetSeenBlocks()))
-	//fmt.Println("rewards gained per miner:")
-	gains := dummy.CalculateGains()
-	fmt.Println("minerID,power,rewards_gained,main_blocks_created,uncle_blocks_created")
-	for i := 0; i < len(miners); i++ {
-		k := fmt.Sprintf("%s", miners[i].GetID())
-		v := gains[k]
-		fmt.Printf("%s,%d,%f,%f,%f\n",k,miners[i].GetMiningPower(), v[0],v[1],v[2])
-	}
-	copy_gains := gains[miners[sid].GetID()[:]]
-	fmt.Printf("%s,%d,%f,%f,%f\n",miners[sid].GetID(),miners[sid].GetMiningPower(), copy_gains[0],copy_gains[1],copy_gains[2])
 }
