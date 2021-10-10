@@ -592,6 +592,7 @@ func (s *SelfishMiner) CalculateGains() map[string][]float64 {
 // 1 is "perfect" fairness
 
 //TODO: probably broken
+/*
 func CalculateFairness(miners []Miner, blockchain []*Block, totalBlocks int) float64 {
 	totMiningPower := 0
 	strongestMiner := -1
@@ -613,7 +614,7 @@ func CalculateFairness(miners []Miner, blockchain []*Block, totalBlocks int) flo
 		}
 	}
 	return (1.0-biggestMiner) / blocksRatio
-}
+}*/
 
 func CalculatePowerUtil(blockchain []*Block, totalBlocks int) float64 {
 	//number of uncles = len(chain) / depth
@@ -635,7 +636,7 @@ func main() {
 	    > miners should try to extend their own block before other blocks at same depth
 	    > currently uncles are simply discarded on inclusion in a block; should be kept in chain somehow
 	  X and rewards
-	model rewarding mechanism to reward u10ncle block creators / nephew rewards
+	model rewarding mechanism to reward uncle block creators / nephew rewards
 	  X look up how ethereum does it
 	    > uncle gets (1 - (n.depth - u.depth)/7) times a block reward
 	    > nephew gets 1/32 of a block reward per uncle included
@@ -691,17 +692,22 @@ func main() {
 		numMiners := conf.Miners
 		for i := 0; i < numMiners; i++ {
 			newMinerPowa := int(math.Floor(math.Pow(conf.PowerScaling,float64(i))))
+			if int(math.Floor(float64(numMiners) * conf.SelfishPower)) == i {
+				selfishMiner := NewSelfishMiner(fmt.Sprintf("s%d", 0), nil, newMinerPowa, conf.SelfishDelay, conf.MaxUncles)
+				miners = append(miners, selfishMiner)
+				continue
+			}
 			miners = append(miners, NewMiner(fmt.Sprintf("m%d", i), nil, newMinerPowa, conf.MaxUncles)) //(i+1)%2*(i+1)))
 
 			totalMiningPower += newMinerPowa//(i+1)%2*(i+1)
 		}
 		//the selfish miner
-		sid := 90
+		/*
 		for i := 0; i < conf.SelfishMiners; i++ {
 			minerPowerIdx := int(float64(numMiners) * conf.SelfishPower)
 			selfishMiner := NewSelfishMiner(fmt.Sprintf("s%d", i), nil, miners[minerPowerIdx].GetMiningPower(), conf.SelfishDelay, conf.MaxUncles)
 			miners = append(miners, selfishMiner)
-		}
+		}*/
 		for _, i := range miners {
 			//i.SetNeighbors(miners)
 			i.GenerateNeighbors(miners, 5, true)
@@ -738,9 +744,11 @@ func main() {
 				fmt.Printf("%s,%d,%f,%f,%f\n",k,miners[i].GetMiningPower(), v[0],v[1],v[2])
 			}
 		}
+		/*
+		sid := int(math.Floor(float64(numMiners) * conf.SelfishPower))
 		copy_gains := gains[miners[sid].GetID()[:]]
 		if len(copy_gains) >= 3 {
 			fmt.Printf("%s,%d,%f,%f,%f\n",miners[sid].GetID(),miners[sid].GetMiningPower(), copy_gains[0],copy_gains[1],copy_gains[2])
-		}
+		}*/
 	}
 }
