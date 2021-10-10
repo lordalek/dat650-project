@@ -692,7 +692,7 @@ func main() {
 		numMiners := conf.Miners
 		for i := 0; i < numMiners; i++ {
 			newMinerPowa := int(math.Floor(math.Pow(conf.PowerScaling,float64(i))))
-			if int(math.Floor(float64(numMiners) * conf.SelfishPower)) == i {
+			if int(math.Floor(float64(numMiners) * conf.SelfishPower)) == i && conf.SelfishMiners > 0{
 				selfishMiner := NewSelfishMiner(fmt.Sprintf("s%d", 0), nil, newMinerPowa, conf.SelfishDelay, conf.MaxUncles)
 				miners = append(miners, selfishMiner)
 				continue
