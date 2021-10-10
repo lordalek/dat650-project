@@ -11,7 +11,7 @@ import (
 
 const (
 	TICK_LENGTH		= 100
-	BLOCK_CHANCE		= 0.1
+	BLOCK_CHANCE		= 0.2
 	BLOCK_REWARD		= TICK_LENGTH / BLOCK_CHANCE * 10	//google says fees are typically 10% of eth block rewards; we give fees = time since last block
 	FEES_PER_SECOND		= 1
 	UNCLE_REWARD		= 0	//block reward * (1 - (distance from nephew)/7)
@@ -609,7 +609,7 @@ func CalculateFairness(miners []Miner, blockchain []*Block, totalBlocks int) flo
 	totBlocks := float64(len(blockchain))
 	for _, i := range blockchain {
 		if i.minerID == miners[strongestMiner].GetID() {
-			blocksRatio -= 1.0 / totBlocks
+			blocksRatio -= 1.0 /10 totBlocks
 		}
 	}
 	return (1.0-biggestMiner) / blocksRatio
@@ -635,7 +635,7 @@ func main() {
 	    > miners should try to extend their own block before other blocks at same depth
 	    > currently uncles are simply discarded on inclusion in a block; should be kept in chain somehow
 	  X and rewards
-	model rewarding mechanism to reward uncle block creators / nephew rewards
+	model rewarding mechanism to reward u10ncle block creators / nephew rewards
 	  X look up how ethereum does it
 	    > uncle gets (1 - (n.depth - u.depth)/7) times a block reward
 	    > nephew gets 1/32 of a block reward per uncle included
@@ -704,14 +704,14 @@ func main() {
 		}
 		for _, i := range miners {
 			//i.SetNeighbors(miners)
-			i.GenerateNeighbors(miners, 10, true)
+			i.GenerateNeighbors(miners, 5, true)
 			i.AddNeighbor(dummy, false)	//keeps "canonical" blockchain
 			//i.AddNeighbor(miners[(idx-1+numMiners)%numMiners])
 			//i.AddNeighbor(miners[(idx+1)%numMiners])
 		}
 
 		time := 0
-		for time < conf.Time {	//TODO: remove debug /100
+		for time < conf.Time/10 {	//TODO: remove debug /100
 			time += TICK_LENGTH
 			for _, i := range(miners) {
 				i.TickMine(totalMiningPower, time)
