@@ -717,7 +717,7 @@ func main() {
 		}
 
 		time := 0
-		for time < conf.Time/1000 {	//TODO: remove debug /100
+		for time < conf.Time/10 {	//TODO: remove debug /100
 			time += TICK_LENGTH
 			for _, i := range(miners) {
 				i.TickMine(totalMiningPower, time)
