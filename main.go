@@ -250,7 +250,7 @@ func (s *SelfishMiner) TickMine(totPower, timestamp int) {
 	block := s.Mine(totPower, timestamp)
 	if block != nil {
 		s.AppendBlock(block)
-		s.EnqueueBlock(block)
+		s.DelayBlock(block)
 	}
 }
 
@@ -717,7 +717,7 @@ func main() {
 		}
 
 		time := 0
-		for time < conf.Time/10 {	//TODO: remove debug /100
+		for time < conf.Time/1000 {	//TODO: remove debug /100
 			time += TICK_LENGTH
 			for _, i := range(miners) {
 				i.TickMine(totalMiningPower, time)
