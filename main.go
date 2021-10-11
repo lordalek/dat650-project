@@ -14,8 +14,6 @@ const (
 	BLOCK_CHANCE		= 0.2
 	BLOCK_REWARD		= TICK_LENGTH / BLOCK_CHANCE * 10	//google says fees are typically 10% of eth block rewards; we give fees = time since last block
 	FEES_PER_SECOND		= 1
-	UNCLE_REWARD		= 0	//block reward * (1 - (distance from nephew)/7)
-	NEPHEW_REWARD		= 0	//block reward * 1/32
 	UNCLES_LIMIT		= 2
 	//SELFISH_PUBLISH_DELAY	= 10
 )
@@ -27,6 +25,9 @@ type config struct {
 	MaxUncles	int	//uncles enabled? t/f
 	PowerScaling	float64	//number equal to or greater than 1.0, miner n will have pS^n mining power
 	//PowerRandomness	float64	//top of random range of power, bottom is 1.0
+	MaxDepth	int
+	UncleDivisor	float64
+	NephewReward	float64
 	SelfishMiners	int	//one or zero, more possible but out of scope
 	SelfishDelay	int	//how many rounds does a selfish miner wait before publishing a block?
 	SelfishPower	float64	//percentile of regular miners the selfish miner has more mining power than, (0,1)
@@ -39,9 +40,9 @@ type Miner interface {
 	SetNeighbors([]Miner)
 	AddNeighbor(Miner, bool)
 
-	TickMine(int, int)
-	Mine(int, int) *Block
-	BlockFound(int) *Block
+	TickMine(int, int, int, int)
+	Mine(int, int, int, int) *Block
+	BlockFound(int,int, int) *Block
 	GetPendingUncles() map[string]*Block
 
 	TickCommunicate()
@@ -62,7 +63,7 @@ type Miner interface {
 
 	GetBlockchain() []*Block
 	GetLastBlock() *Block
-	CalculateGains() map[string][]float64
+	CalculateGains(int, float64, float64) map[string][]float64
 }
 
 type HonestMiner struct {
@@ -224,8 +225,8 @@ func (b *Block) Equals(block *Block) bool {
 	//TODO: check if uncles match
 }
 
-func (m *HonestMiner) TickMine(totPower, timestamp int) {
-	block := m.Mine(totPower, timestamp)
+func (m *HonestMiner) TickMine(totPower, timestamp, maxDepth, maxUncles int) {
+	block := m.Mine(totPower, timestamp, maxDepth, maxUncles)
 	if block != nil {
 		m.AppendBlock(block)
 		m.EnqueueBlock(block)
@@ -246,8 +247,8 @@ func (m *HonestMiner) TickRead() {
 	}
 }
 
-func (s *SelfishMiner) TickMine(totPower, timestamp int) {
-	block := s.Mine(totPower, timestamp)
+func (s *SelfishMiner) TickMine(totPower, timestamp, maxDepth, maxUncles int) {
+	block := s.Mine(totPower, timestamp, maxDepth, maxUncles)
 	if block != nil {
 		s.AppendBlock(block)
 		s.DelayBlock(block)
@@ -273,32 +274,32 @@ func (s *SelfishMiner) TickRead() {
 //new block can reference one or more uncles, gaining extra rewards
 //when block is found, trigger BlockFound()
 //tot_power and timestamp tracked in main()
-func (m *HonestMiner) Mine(totPower, timestamp int) *Block {
+func (m *HonestMiner) Mine(totPower, timestamp, maxDepth, maxUncles int) *Block {
 	odds := BLOCK_CHANCE * float64(m.miningPower) / float64(totPower)
 	if odds > rand.Float64() {
-		return m.BlockFound(timestamp)
+		return m.BlockFound(timestamp, maxDepth, maxUncles)
 	}
 	return nil
 }
 
 //wait x ticks before announcing
-func (s *SelfishMiner) Mine(totPower, timestamp int) *Block {
-	return s.miner.Mine(totPower, timestamp)
+func (s *SelfishMiner) Mine(totPower, timestamp, maxDepth, maxUncles int) *Block {
+	return s.miner.Mine(totPower, timestamp, maxDepth, maxUncles)
 }
 
-func (m *HonestMiner) BlockFound(timestamp int) *Block {
+func (m *HonestMiner) BlockFound(timestamp, maxDepth, maxUncles int) *Block {
 	parent := m.GetLastBlock()
 	pendingUncles := m.GetPendingUncles()
 	block := NewBlock(m.id, parent,pendingUncles,timestamp + rand.Intn(TICK_LENGTH - 1))	//timestamp in steps of 100 -> rand up to 99
 	//remove/save uncles
 	unclesIncluded := 0
 	for _, i := range pendingUncles {
-		if i.depth - block.depth > 7 {
+		if i.depth - block.depth > maxDepth && i.depth - block.depth < 20 {
 			continue
 		}
 		unclesIncluded += 1
 		m.IncludeUncle(i)
-		if unclesIncluded >= UNCLES_LIMIT {
+		if unclesIncluded >= maxUncles {
 			break
 		}
 	}
@@ -309,8 +310,8 @@ func (m *HonestMiner) BlockFound(timestamp int) *Block {
 	return block
 }
 
-func (s *SelfishMiner) BlockFound(timestamp int) *Block {
-	return s.miner.BlockFound(timestamp)
+func (s *SelfishMiner) BlockFound(timestamp, maxDepth, maxUncles int) *Block {
+	return s.miner.BlockFound(timestamp, maxDepth, maxUncles)
 }
 
 func (m *HonestMiner) PublishBlock(b *Block) {
@@ -536,7 +537,7 @@ func (s *SelfishMiner) GetPendingUncles() map[string]*Block {
 //iterate through the block chain, starting with latest block and iterating through parents: 
 //  add fees from each block to the miner's total earnings
 //TODO: uncles
-func (m *HonestMiner) CalculateGains() map[string][]float64 {
+func (m *HonestMiner) CalculateGains(maxDepth int, uncleDivisor, nephewReward float64) map[string][]float64 {
 	gains := make(map[string][]float64)
 	curBlock := m.GetLastBlock()
 	mid := ""
@@ -549,10 +550,11 @@ func (m *HonestMiner) CalculateGains() map[string][]float64 {
 		blockReward += BLOCK_REWARD
 		blockReward += float64(curBlock.fees)
 		for _, u := range curBlock.uncles {
-			blockReward += float64(BLOCK_REWARD) / 32
+			blockReward += float64(BLOCK_REWARD) * nephewReward
 			uid = u.minerID
 			uncleDistance = curBlock.depth - u.depth
-			uncleReward = math.Max(float64(BLOCK_REWARD) * (1 - float64(uncleDistance)/7),0)
+			uncleReward = math.Max(float64(BLOCK_REWARD) * (1 - float64(uncleDistance)/float64(maxDepth)),0)
+			uncleReward = uncleReward / uncleDivisor
 			if _, found := gains[uid]; found {
 				gains[uid][0] += uncleReward
 				gains[uid][2] += 1
@@ -578,8 +580,8 @@ func (m *HonestMiner) CalculateGains() map[string][]float64 {
 	return gains
 }
 
-func (s *SelfishMiner) CalculateGains() map[string][]float64 {
-	return s.miner.CalculateGains()
+func (s *SelfishMiner) CalculateGains(maxDepth int, uncleDivisor, nephewReward float64) map[string][]float64 {
+	return s.miner.CalculateGains(maxDepth, uncleDivisor, nephewReward)
 }
 
 //calculate fairness
@@ -675,7 +677,7 @@ func main() {
 	//nice-to-have: plot of block/time with and without selfish miner
 
 	json_path := os.Args[1]
-	file, _ := os.Open("./config/" + json_path)
+	file, _ := os.Open("./config_uncleOptions/" + json_path)
 	conf := config{}
 	buf := make([]byte, 4096)
 	n, _ := file.Read(buf)
@@ -717,10 +719,10 @@ func main() {
 		}
 
 		time := 0
-		for time < conf.Time/10 {	//TODO: remove debug /100
+		for time < conf.Time/1000 {	//TODO: remove debug /100
 			time += TICK_LENGTH
 			for _, i := range(miners) {
-				i.TickMine(totalMiningPower, time)
+				i.TickMine(totalMiningPower, time, conf.MaxDepth, conf.MaxUncles)
 			}
 			for _, i := range(miners) {
 				i.TickCommunicate()
@@ -735,7 +737,7 @@ func main() {
 		//fmt.Printf("mining power utilization: %f\n", CalculatePowerUtil(dummy.GetBlockchain(), len(dummy.GetSeenBlocks())))
 		//fmt.Println("blocks created:", len(dummy.GetSeenBlocks()))
 		//fmt.Println("rewards gained per miner:")
-		gains := dummy.CalculateGains()
+		gains := dummy.CalculateGains(conf.MaxDepth, conf.UncleDivisor, conf.NephewReward)
 		fmt.Println("minerID,power,rewards_gained,main_blocks_created,uncle_blocks_created")
 		for i := 0; i < len(miners); i++ {
 			k := fmt.Sprintf("%s", miners[i].GetID())
