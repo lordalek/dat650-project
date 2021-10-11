@@ -14,7 +14,6 @@ const (
 	BLOCK_CHANCE		= 0.2
 	BLOCK_REWARD		= TICK_LENGTH / BLOCK_CHANCE * 10	//google says fees are typically 10% of eth block rewards; we give fees = time since last block
 	FEES_PER_SECOND		= 1
-	UNCLES_LIMIT		= 2
 	//SELFISH_PUBLISH_DELAY	= 10
 )
 
@@ -289,22 +288,22 @@ func (s *SelfishMiner) Mine(totPower, timestamp, maxDepth, maxUncles int) *Block
 
 func (m *HonestMiner) BlockFound(timestamp, maxDepth, maxUncles int) *Block {
 	parent := m.GetLastBlock()
+	newDepth := parent.depth + 1
 	pendingUncles := m.GetPendingUncles()
-	block := NewBlock(m.id, parent,pendingUncles,timestamp + rand.Intn(TICK_LENGTH - 1))	//timestamp in steps of 100 -> rand up to 99
-	//remove/save uncles
+	includedUncles := make(map[string]*Block)
 	unclesIncluded := 0
-	if maxUncles >= 1 {
-		for _, i := range pendingUncles {
-			if i.depth - block.depth > maxDepth && i.depth - block.depth < 20 {
-				continue
-			}
-			unclesIncluded += 1
-			m.IncludeUncle(i)
-			if unclesIncluded >= maxUncles {
-				break
-			}
+	for _, i := range pendingUncles {
+		if unclesIncluded >= maxUncles {
+			break
 		}
+		if i.depth - newDepth > maxDepth && i.depth - newDepth < 20 {
+			continue
+		}
+		includedUncles[i.GetID()] = i
+		unclesIncluded += 1
+		m.IncludeUncle(i)
 	}
+	block := NewBlock(m.id, parent, includedUncles, timestamp + rand.Intn(TICK_LENGTH - 1))	//timestamp in steps of 100 -> rand up to 99
 
 	//fmt.Println(fmt.Sprintf("%+v\n", block))
 
