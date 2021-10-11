@@ -293,14 +293,16 @@ func (m *HonestMiner) BlockFound(timestamp, maxDepth, maxUncles int) *Block {
 	block := NewBlock(m.id, parent,pendingUncles,timestamp + rand.Intn(TICK_LENGTH - 1))	//timestamp in steps of 100 -> rand up to 99
 	//remove/save uncles
 	unclesIncluded := 0
-	for _, i := range pendingUncles {
-		if i.depth - block.depth > maxDepth && i.depth - block.depth < 20 {
-			continue
-		}
-		unclesIncluded += 1
-		m.IncludeUncle(i)
-		if unclesIncluded >= maxUncles {
-			break
+	if maxUncles >= 1 {
+		for _, i := range pendingUncles {
+			if i.depth - block.depth > maxDepth && i.depth - block.depth < 20 {
+				continue
+			}
+			unclesIncluded += 1
+			m.IncludeUncle(i)
+			if unclesIncluded >= maxUncles {
+				break
+			}
 		}
 	}
 
@@ -694,7 +696,7 @@ func main() {
 		numMiners := conf.Miners
 		for i := 0; i < numMiners; i++ {
 			newMinerPowa := int(math.Floor(math.Pow(conf.PowerScaling,float64(i))))
-			if int(math.Floor(float64(numMiners) * conf.SelfishPower)) == i && conf.SelfishMiners > 0{
+			if int(math.Floor(float64(numMiners) * conf.SelfishPower)) == i && conf.SelfishMiners > 0 {
 				selfishMiner := NewSelfishMiner(fmt.Sprintf("s%d", 0), nil, newMinerPowa, conf.SelfishDelay, conf.MaxUncles)
 				miners = append(miners, selfishMiner)
 				continue
@@ -719,7 +721,7 @@ func main() {
 		}
 
 		time := 0
-		for time < conf.Time/1000 {	//TODO: remove debug /100
+		for time < conf.Time/50 {	//TODO: remove debug /100
 			time += TICK_LENGTH
 			for _, i := range(miners) {
 				i.TickMine(totalMiningPower, time, conf.MaxDepth, conf.MaxUncles)
