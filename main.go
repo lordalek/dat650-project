@@ -742,9 +742,13 @@ func main() {
 		fmt.Println("minerID,power,rewards_gained,main_blocks_created,uncle_blocks_created")
 		for i := 0; i < len(miners); i++ {
 			k := fmt.Sprintf("%s", miners[i].GetID())
-			v := gains[k]
-			if len(v) >= 3 {
-				fmt.Printf("%s,%d,%f,%f,%f\n",k,miners[i].GetMiningPower(), v[0],v[1],v[2])
+			v, found := gains[k]
+			if found {
+				if len(v) >= 3 {
+					fmt.Printf("%s,%d,%f,%f,%f\n",k,miners[i].GetMiningPower(), v[0],v[1],v[2])
+				}
+			} else {
+				fmt.Printf("%s,%d,%f,%f,%f\n",k,miners[i].GetMiningPower(),0.0,0.0,0.0)
 			}
 		}
 		/*
