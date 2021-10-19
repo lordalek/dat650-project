@@ -24,16 +24,16 @@ type config struct {
 func main() {
 	savePath := "./config_uncleOptions/"
 	runs := []int{20}
-	time := []int{100000000}
+	time := []int{100000}
 	miners := []int{100}
-	uncles := []int{2}//, 5, 32}
+	uncles := []int{0, 2}//, 5, 32}
 	powerScaling := []float64{1.2}
-	maxDepth := []int{7,3,15}
-	uncleDivisor := []float64{1.0, 2.0}
+	maxDepth := []int{7}//,3,15}
+	uncleDivisor := []float64{1.0}//, 2.0}
 	nephewReward := []float64{1/32}
 	selfishMiners := []int{0,1}
-	selfishDelay := []int{10,30}
-	selfishPower := []float64{0.1,0.9}
+	selfishDelay := []int{3,5}
+	selfishPower := []float64{0.99}
 	conf := config{}
 	i := 0
 	for _, r := range runs {
